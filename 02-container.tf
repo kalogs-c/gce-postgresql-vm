@@ -33,11 +33,6 @@ module "gce-container" {
       emptyDir = {
         medium = "Memory"
       }
-
-      # gcePersistentDisk = {
-      #   pdName = "data"
-      #   fsType = "ext4"
-      # }
     }
   ]
 
