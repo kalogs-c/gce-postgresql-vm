@@ -1,6 +1,9 @@
-project_id   = "PROJECT_ID"
-sql_username = "sql"
-sql_password = "sql"
-sql_database = "sql"
-ip_name      = "sql"
-vm_name      = "sql"
+project_id       = "YOUR_PROJECT_ID"
+sql_username     = "postgres"
+sql_password     = "YOUR_PASSWORD"
+sql_database     = "appdb"
+ip_name          = "postgres-ip"
+vm_name          = "postgres-vm"
+postgres_version = "16"
+disk_size        = 20
+extra_databases  = ["analytics", "logs"]

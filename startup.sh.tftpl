@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e -x
+
+DATA_DISK="/dev/disk/by-id/google-pg-data"
+MOUNT_POINT="/var/lib/postgresql/data"
+
+if [ "$(blkid -o value -s TYPE $${DATA_DISK})" = "" ]; then
+  mkfs.ext4 $${DATA_DISK}
+fi
+
+mkdir -p $${MOUNT_POINT}
+mountpoint -q $${MOUNT_POINT} || mount $${DATA_DISK} $${MOUNT_POINT}
+
+docker stop postgres 2>/dev/null || true
+docker rm postgres 2>/dev/null || true
+
+docker run -d \
+  --name postgres \
+  --restart always \
+  -p 5432:5432 \
+  -e POSTGRES_USER="${sql_username}" \
+  -e POSTGRES_PASSWORD="${sql_password}" \
+  -e POSTGRES_DB="${sql_database}" \
+  -v $${MOUNT_POINT}:/var/lib/postgresql/data \
+  "${postgres_image}"
+
+%{ for db in extra_databases ~}
+for i in $(seq 1 30); do
+  docker exec postgres psql -U "${sql_username}" -d "${sql_database}" -c "SELECT 1" >/dev/null 2>&1 && break
+  sleep 2
+done
+docker exec postgres psql -U "${sql_username}" -d "${sql_database}" -tc \
+  "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 \
+  || docker exec postgres psql -U "${sql_username}" -d "${sql_database}" -c "CREATE DATABASE \"${db}\""
+%{ endfor ~}
