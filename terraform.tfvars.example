@@ -1,0 +1,6 @@
+project_id   = "PROJECT_ID"
+sql_username = "sql"
+sql_password = "sql"
+sql_database = "sql"
+ip_name      = "sql"
+vm_name      = "sql"
