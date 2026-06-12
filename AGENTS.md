@@ -28,12 +28,6 @@ terraform apply terraform.plan
 terraform destroy
 ```
 
-### Makefile targets
-```bash
-make plan    # terraform plan -out terraform.plan -var-file=terraform.tfvars
-make apply   # terraform apply terraform.plan
-```
-
 ### Creating a plan with specific variable overrides
 ```bash
 terraform plan -out terraform.plan -var-file=terraform.tfvars -var="project_id=my-project"
@@ -45,24 +39,38 @@ There are no tests in this repository. If adding tests, use a standard Terraform
 - Or [Terratest](https://terratest.gruntwork.io/) (Go-based, in a separate `test/` directory)
 
 ### Notes
-- `.terraform.lock.hcl` pins `hashicorp/google` to `4.69.1`
+- Provider `hashicorp/google` pinned to `~> 6.0` via `required_providers` in `01-provider.tf`
+- Terraform >= 1.3 required (needed for `validation` blocks in variable declarations)
 - `terraform.tfvars` is gitignored — never commit secrets
 - Any `.plan` files and `.terraform/` directory are gitignored
+- `*.tfstate` and `*.tfstate.*` are gitignored
 
 ---
 
 ## Code Style Guidelines
 
 ### File organization
-- Use numbered prefix pattern for `.tf` files: `01-provider.tf`, `02-container.tf`, etc.
+- Use numbered prefix pattern for `.tf` files: `01-provider.tf`, `02-vpc_ip.tf`, etc.
 - Each `.tf` file should be single-purpose, named after the resource/concern it configures
-- Keep files small and focused (all current files are 5–50 lines)
+- Keep files small and focused (all current files are 5–55 lines)
+- Current file map:
+  - `01-provider.tf` — Terraform/provider settings (`required_version`, `required_providers`)
+  - `02-vpc_ip.tf` — Static IP address resource
+  - `03-vm.tf` — COS image data source, persistent disk resource, VM instance
+  - `04-firewall.tf` — Firewall rule for port 5432
+  - `05-outputs.tf` — Terraform outputs
+  - `variables.tf` — All variable declarations
+
+### Startup script template
+- Container deployment uses a `startup.sh.tftpl` file rendered via `templatefile()`
+- Template file lives alongside `.tf` files at the project root
+- `startup.sh.tftpl` handles: disk formatting/mounting, Docker run with PostgreSQL, extra database creation
 
 ### Naming conventions
-- **Variables**: `snake_case` (e.g., `project_id`, `sql_username`, `machine_type`, `vm_name`)
-- **Resources**: hyphenated name argument (e.g., `"postgres-vm"`, `"http-access"`)
-- **Data sources**: short descriptive name (e.g., `"postgres"`, `"existing-ip"`)
-- **Modules**: hyphenated (e.g., `"gce-container"`)
+- **Variables**: `snake_case` (e.g., `project_id`, `sql_username`, `machine_type`, `vm_name`, `allowed_source_ranges`)
+- **Resources**: hyphenated name argument (e.g., `"postgres-vm"`, `"postgres-access"`)
+- **Data sources**: short descriptive name (e.g., `"cos"`)
+- **Files**: hyphenated snake_case (e.g., `02-vpc_ip.tf`, `startup.sh.tftpl`)
 
 ### Variable declarations
 ```hcl
@@ -70,18 +78,45 @@ variable "name" {
   type        = string
   description = "Human-readable description"
   default     = "value"  # omit if required
+  sensitive   = true     # for secrets like passwords
 }
 ```
 - Always include `type` and `description`
 - Include `default` only for optional variables with a sensible default
+- Mark secrets with `sensitive = true`
 - Separate variable blocks with a blank line
+- Use `validation` blocks for input constraints (see below)
+
+### Validation blocks
+```hcl
+variable "postgres_version" {
+  type        = string
+  description = "PostgreSQL major version tag"
+  default     = "16"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.postgres_version))
+    error_message = "Must be a numeric PostgreSQL version (e.g. 16)."
+  }
+}
+
+variable "disk_size" {
+  type        = number
+  description = "Disk size in GB"
+  default     = 20
+
+  validation {
+    condition     = var.disk_size >= 10 && var.disk_size <= 100
+    error_message = "Disk size must be between 10 and 100 GB."
+  }
+}
+```
 
 ### Resource definitions
 ```hcl
 resource "google_compute_xxx" "resource-name" {
   name         = var.some_name
   project      = var.project_id
-  # ...
 
   block_name {
     nested_block {
@@ -105,21 +140,35 @@ resource "google_compute_xxx" "resource-name" {
 - Nested blocks use `{ }` on new lines
 - Array/list args: one element per line
 
-### Module usage
+### templatefile usage
 ```hcl
-module "module-name" {
-  source  = "terraform-google-modules/container-vm/google"
-  version = "~> 2.0"
+metadata_startup_script = templatefile("${path.module}/startup.sh.tftpl", {
+  template_var  = var.some_var
+  another_var   = var.another_var
+})
+```
+- Use `${path.module}` prefix for the template file path
+- All template variables passed explicitly in the map argument
+- Template escape rules:
+  - `${...}` — interpolated by Terraform
+  - `$${...}` — literal `${...}` in output (bash variable reference)
+  - `%{ for ... }` / `%{ endfor }` — Terraform template directives
+  - `~` — whitespace chomping in directives
+  - `$(...)` (bash subcommand) — passes through as-is (Terraform only interprets `${}`)
 
-  arg_name = value
+### Data sources
+```hcl
+data "google_compute_image" "cos" {
+  family  = "cos-stable"
+  project = "cos-cloud"
 }
 ```
-- Always pin `source` and `version`
-- Module arguments grouped logically
+- Reference via `data.TYPE.NAME.ATTRIBUTE` (e.g., `data.google_compute_image.cos.self_link`)
 
 ### Comments
 - Use `#` for single-line comments
 - Use comments sparingly — prefer self-documenting code
+- No block comments (`/* */`)
 
 ### Terraform formatting
 - Run `terraform fmt` before committing
@@ -128,32 +177,22 @@ module "module-name" {
 ### Secrets & credentials
 - Never commit `service_account.json`, `terraform.tfvars`, or any `.json` key files
 - Pass sensitive values via `terraform.tfvars` (gitignored) or `-var` flags
-- Variables for secrets: `sensitive = true` is preferred
+- Use `sensitive = true` on variables that hold secrets
+- Never hardcode project IDs or passwords in `.tf` files
 
-### Error handling (Terraform patterns)
-- Use `precondition` / `postcondition` blocks for input validation (Terraform 1.2+)
-- Use `lifecycle { precondition { ... } }` for custom validation
-- Use `validation` block in variable declarations for input constraints:
-```hcl
-variable "machine_type" {
-  type        = string
-  description = "GCE machine type"
-  default     = "e2-micro"
-
-  validation {
-    condition     = can(regex("^[a-z]+-[a-z]+-[0-9]+$", var.machine_type))
-    error_message = "Must be a valid GCE machine type."
-  }
-}
-```
-- Never hardcode secrets or project IDs
+### Error handling
+- Use `validation` block in variable declarations for input constraints (Terraform 1.2+)
+- Use `lifecycle { precondition { ... } }` for cross-variable validation
+- For resources: `allow_stopping_for_update = true` to avoid destroy/recreate cycles
+- Startups scripts use `set -e -x` for fail-fast and debug logging
+- Docker cleanup uses `|| true` to ignore errors when container doesn't exist yet
 
 ### Conventions to maintain
 - Each `.tf` file: small, focused, numbered `XX-short-name.tf`
 - `variables.tf` collects all variable declarations
-- Resources reference variables via `var.xxx` and data sources via `data.xxx.name.attribute`
-- Modules reference outputs via `module.name.output_name`
+- Resources reference variables via `var.xxx`, resources via `RESOURCE_TYPE.NAME.ATTRIBUTE`, data sources via `data.TYPE.NAME.ATTRIBUTE`
+- No module usage (the old `container-vm` module was removed — containers are deployed via startup script)
 
 ### Git workflow
-- Single `init` commit on `main`
 - `.gitignore` covers: `.terraform/`, `*.tfstate*`, `*.tfvars`, `*.log`, `*.plan`
+- Do not commit `terraform.tfvars`, `.terraform/`, or `.plan` files

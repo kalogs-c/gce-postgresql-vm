@@ -1,105 +1,78 @@
-# Creating a VM with PostgreSQL on Google Compute Engine using Terraform
+# PostgreSQL VM on Google Compute Engine
 
-This Terraform script allows you to easily create a virtual machine (VM) on
-Google Compute Engine with the PostgreSQL image installed. You can customize
-various aspects of the VM by passing variables to the script, such as the
-username, password, IP address, machine type, project ID, and more.
+Creates an `e2-micro` VM on GCP running PostgreSQL 16 in Docker on Container-Optimized OS, with a persistent disk for data. Fits within the [GCP free tier](https://cloud.google.com/free/docs/free-cloud-features#compute) (1 VM, 30 GB total persistent disk).
 
 ## Prerequisites
 
-Before using this Terraform script, ensure that you have the following
-prerequisites:
-
-1. [Terraform](https://www.terraform.io/) installed on your local machine.
-2. A Google Cloud Platform (GCP) account with the necessary permissions to
-   create and manage resources.
-3. The GCP credentials JSON file (`service_account.json`) for the account or
-   logged on your Google account using the `gcloud cli` on your desktop.
+- [Terraform](https://www.terraform.io/) >= 1.3
+- A GCP project with billing enabled
+- Authentication via `gcloud auth application-default login` or a service account JSON key
 
 ## Getting Started
 
-To use this Terraform script, follow these steps:
+```bash
+# 1. Authenticate with GCP
+gcloud auth application-default login
 
-1. Clone or download this repository to your local machine.
+# 2. Copy and edit variables
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your project_id, sql_password, etc.
 
-   ```bash
-   git clone https://github.com/kalogs-c/gce-postgresql-vm.git
-   ```
+# 3. Initialize (downloads provider and modules)
+terraform init
 
-2. Navigate to the project directory:
+# 4. Preview and apply
+terraform plan -out terraform.plan -var-file=terraform.tfvars
+terraform apply terraform.plan
 
-   ```bash
-   cd gce-postgresql-vm
-   ```
+# 5. Get connection details
+terraform output connection_string
 
-3. Copy your GCP credentials JSON file (`service_account.json`) into the project
-   directory (ignore if you are using the `gcloud cli` and are already logged in
-   with your correct Google account).
+# 6. Destroy when done
+terraform destroy
+```
 
-4. Initialize the Terraform configuration:
+## Variables
 
-   ```bash
-   terraform init
-   ```
+| Variable | Default | Description |
+|---|---|---|
+| `project_id` | — | GCP project ID |
+| `region` | `us-central1` | Region (use `us-central1`, `us-west1`, or `us-east1` for free tier) |
+| `zone` | `us-central1-a` | Zone |
+| `sql_username` | — | PostgreSQL username |
+| `sql_password` | — | PostgreSQL password (sensitive) |
+| `sql_database` | — | Primary PostgreSQL database |
+| `extra_databases` | `[]` | Additional databases to create (e.g. `["analytics", "logs"]`) |
+| `ip_name` | — | Name for the static external IP address (created automatically) |
+| `vm_name` | — | VM instance name |
+| `machine_type` | `e2-micro` | GCE machine type (free tier eligible) |
+| `network` | `default` | VPC network name |
+| `postgres_version` | `16` | PostgreSQL major version tag |
+| `disk_size` | `20` | Persistent disk size for PostgreSQL data in GB (boot is 10 GB, total 30 GB within free tier) |
+| `allowed_source_ranges` | `["0.0.0.0/0"]` | CIDR ranges allowed to connect (restrict to your IP for security) |
 
-5. Customize the variables:
+## Outputs
 
-   Open the `variables.tf` file in a text editor and modify the values according
-   to your requirements or rename `terraform.tfvars.example` to just
-   `terraform.tfvars`. You can change the following variables:
+| Output | Description |
+|---|---|
+| `instance_name` | VM instance name |
+| `external_ip` | External IP address |
+| `database_name` | Primary database name |
+| `connection_string` | PostgreSQL connection URI (sensitive) |
 
-   - `project_id`: Your GCP project ID.
-   - `region`: The GCP region where the VM should be created (default:
-     `us-central1`).
-   - `zone`: The GCP zone where the VM should be created (default:
-     `us-central1-a`).
-   - `sql_username`: The desired username for PostgreSQL.
-   - `sql_password`: The desired password for PostgreSQL.
-   - `sql_database`: The name of the database to be created in PostgreSQL.
-   - `ip_name`: Name of the static IP address to be assigned to the VM, if you
-     already have one create on VPC you can use it.
-   - `vm_name`: Name of the VM.
-   - `machine_type`: The desired machine type for the VM (default: `e2-micro`).
+## Architecture
 
-6. Review the other settings in the Terraform files and make any necessary
-   changes.
-
-7. Deploy the infrastructure by running:
-
-   ```bash
-   terraform apply
-   ```
-
-   Terraform will now create the VM with PostgreSQL using the provided
-   variables.
-
-8. Once the deployment is complete, Terraform will display the IP address and
-   other relevant information about the created VM. You can use this information
-   to connect to the VM and interact with PostgreSQL.
-
-9. To tear down the infrastructure and delete all resources created by
-   Terraform, run:
-
-   ```bash
-   terraform destroy
-   ```
-
-   Confirm the destruction when prompted.
-
-## Additional Notes
-
-- If you want to enable additional features or customize the PostgreSQL
-  installation further, refer to the official
-  [PostgreSQL documentation](https://www.postgresql.org/docs/) for more
-  information.
-
-- Make sure to keep your `service_account.json` file secure and do not commit it
-  to version control systems.
+- **VM**: `e2-micro` on Container-Optimized OS (COS)
+- **Container**: PostgreSQL runs via Docker, started by a startup script
+- **Disk**: 10 GB boot (pd-standard) + variable data disk (pd-standard) = up to 30 GB free tier
+- **Networking**: Static external IP created by Terraform, firewall on port 5432
+- **Extra databases**: Created automatically via `docker exec` after PostgreSQL is ready
 
 ## Troubleshooting
 
-- If you encounter any issues or have questions, please open an issue in the
-  repository's issue tracker.
+Check the startup script logs on the VM:
 
-- For general troubleshooting and assistance with Terraform, consult the
-  official [Terraform documentation](https://learn.hashicorp.com/terraform).
+```bash
+gcloud compute ssh <vm_name> --zone <zone> -- \
+  "sudo journalctl -u google-startup-scripts.service --no-pager"
+```
